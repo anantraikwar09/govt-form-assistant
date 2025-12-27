@@ -1,9 +1,0 @@
-streamlit
-pytesseract
-Pillow
-pandas
-streamlit-mic-recorder
-SpeechRecognition
-opencv-python-headless
-fpdf
-numpy
