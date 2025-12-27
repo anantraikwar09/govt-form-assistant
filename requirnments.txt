@@ -7,3 +7,5 @@ SpeechRecognition
 opencv-python-headless
 fpdf
 numpy
+
+
