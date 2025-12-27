@@ -10,37 +10,30 @@ import cv2
 import numpy as np
 from fpdf import FPDF
 
-# --- STEP 1: SMARTER EXTRACTION LOGIC (PRIORITIZING ENGLISH TO AVOID TRANSLATION ERRORS) ---
+# --- STEP 1: EXTRACTION LOGIC ---
 def extract_fields(text):
-    # Numbers (Very reliable regex)
+    # Numbers
     pan = re.search(r'[A-Z]{5}[0-9]{4}[A-Z]{1}', text.upper())
     aadhaar = re.search(r'\d{4}\s?\d{4}\s?\d{4}', text)
     dob = re.search(r'\d{2}/\d{2}/\d{4}|\d{2}-\d{2}-\d{4}', text)
-
-    # Nuclear Name Extraction: Search & Destroy
-    garbage_keywords = [
-        'GOVERNMENT', 'INDIA', 'INCOME', 'TAX', 'DEPARTMENT', 'भारत', 'सरकार', 
-        'आयकर', 'विभाग', 'CARD', 'MALE', 'FEMALE', 'FATHER', 'ACCOUNT', 'NUMBER',
-        'PERMANENT', 'SIGNATURE', 'NOT', 'VALID', 'FOR', 'TRAVEL', 'UNIQUE', 'IDENTIFICATION'
-    ]
     
+    # Gender Logic
+    gender = ""
+    if re.search(r'MALE|M\s?A\s?L\s?E|पुरुष', text, re.IGNORECASE):
+        gender = "Male"
+    elif re.search(r'FEMALE|F\s?E\s?M\s?A\s?L\s?E|महिला', text, re.IGNORECASE):
+        gender = "Female"
+
+    # Name Extraction (English Script only)
+    garbage_keywords = ['GOVERNMENT', 'INDIA', 'INCOME', 'TAX', 'DEPARTMENT', 'CARD', 'FATHER', 'NUMBER', 'SIGNATURE', 'UNIQUE']
     lines = text.split('\n')
     name = ""
     for line in lines:
         line = line.strip()
-        
-        # NEW RULE: Skip lines containing Hindi characters to avoid "Anant" -> "Infinite" translation
-        if re.search(r'[\u0900-\u097F]', line): 
-            continue 
-
-        # Rule 1: No numbers in a name
+        if re.search(r'[\u0900-\u097F]', line): continue 
         if any(char.isdigit() for char in line): continue
-        # Rule 2: Must be longer than 3 chars
         if len(line) < 4: continue
-        # Rule 3: Skip lines with "Government" or "Department"
         if any(word in line.upper() for word in garbage_keywords): continue
-        
-        # If it passes, it's the English version of the name
         name = line
         break
 
@@ -48,82 +41,114 @@ def extract_fields(text):
         "PAN": pan.group(0) if pan else "",
         "Aadhaar": aadhaar.group(0) if aadhaar else "",
         "DOB": dob.group(0) if dob else "",
+        "Gender": gender,
         "Name": name
     }
 
-# --- STEP 2: PDF GENERATION ---
-def create_pdf(name, pan, aadhaar, dob):
+# --- STEP 2: ENHANCED PDF GENERATION ---
+def create_pdf(name, pan, aadhaar, dob, gender):
     pdf = FPDF()
     pdf.add_page()
+    
+    # Header
+    pdf.set_fill_color(230, 230, 230)
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="Smart Form Application", ln=True, align='C')
+    pdf.cell(0, 15, "GOVERNMENT SERVICE APPLICATION FORM", 1, 1, 'C', True)
     pdf.ln(10)
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Full Name: {name}", ln=True)
-    pdf.cell(200, 10, txt=f"PAN Number: {pan}", ln=True)
-    pdf.cell(200, 10, txt=f"Aadhaar Number: {aadhaar}", ln=True)
-    pdf.cell(200, 10, txt=f"Date of Birth: {dob}", ln=True)
+    
+    # Content Table
+    pdf.set_font("Arial", 'B', 12)
+    data = [
+        ["Full Name", name],
+        ["Date of Birth", dob],
+        ["Gender", gender],
+        ["Aadhaar Number", aadhaar],
+        ["PAN Number", pan]
+    ]
+    
+    for row in data:
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(60, 10, row[0], 1)
+        pdf.set_font("Arial", '', 12)
+        pdf.cell(0, 10, row[1], 1, 1)
+        
+    pdf.ln(20)
+    pdf.set_font("Arial", 'I', 10)
+    pdf.cell(0, 10, "Declaration: I hereby declare that the information provided is true to my knowledge.", 0, 1)
+    pdf.ln(10)
+    pdf.cell(0, 10, "Signature: __________________________", 0, 1, 'R')
+    
     return pdf.output(dest='S').encode('latin-1')
 
-# --- STEP 3: UI SETTINGS ---
-st.set_page_config(page_title="AI Citizen Assistant", layout="centered")
-st.title("🇮🇳 AI Form Filler (OCR + Voice)")
+# --- STEP 3: UI ---
+st.set_page_config(page_title="AI Citizen Assistant", layout="wide")
+st.title("🇮🇳 AI Form Filler & PDF Generator")
 
-uploaded_file = st.file_uploader("Upload ID Card", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload ID Card (Aadhaar/PAN)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # 1. Image Preprocessing with OpenCV
+    # Processing
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, 1)
-    
-    # Convert to Grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Thresholding: Makes text black and background white
     processed_img = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     
-    st.image(img, caption="Original Document", width=500)
+    col_img, col_form = st.columns([1, 1])
     
-    # 2. Extract Data
-    with st.spinner("Analyzing text..."):
-        # We extract both but our filter will now pick the English line for the name
-        raw_text = pytesseract.image_to_string(processed_img, lang='eng+hin', config='--psm 3')
-        data = extract_fields(raw_text)
+    with col_img:
+        st.image(img, caption="Uploaded Document", use_container_width=True)
         
-        # Translation removed to prevent semantic errors like Anant -> Infinite
-        final_name = data["Name"]
+    with col_form:
+        with st.spinner("Extracting data..."):
+            raw_text = pytesseract.image_to_string(processed_img, lang='eng+hin', config='--psm 3')
+            data = extract_fields(raw_text)
 
-    # 3. User Interface Form
-    st.subheader("📝 Verify Extracted Details")
-    col1, col2 = st.columns(2)
-    with col1:
-        f_name = st.text_input("Full Name", value=final_name)
-        f_dob = st.text_input("Date of Birth", value=data["DOB"])
-    with col2:
-        f_pan = st.text_input("PAN Number", value=data["PAN"])
-        f_aadhaar = st.text_input("Aadhaar Number", value=data["Aadhaar"])
+        st.subheader("📝 Verify Details")
+        f_name = st.text_input("Name", value=data["Name"])
+        f_dob = st.text_input("DOB", value=data["DOB"])
+        f_gender = st.selectbox("Gender", ["Male", "Female", "Other"], index=0 if data["Gender"] == "Male" else 1 if data["Gender"] == "Female" else 2)
+        f_pan = st.text_input("PAN", value=data["PAN"])
+        f_aadhaar = st.text_input("Aadhaar", value=data["Aadhaar"])
 
-    # 4. Voice Input for correction
-    st.subheader("🎙️ Voice Correction")
-    st.info("If the name is wrong, speak it here:")
-    audio = mic_recorder(start_prompt="⏺️ Record Name", stop_prompt="⏹️ Stop", key='recorder')
-    
-    if audio:
-        r = sr.Recognizer()
-        with sr.AudioFile(io.BytesIO(audio['bytes'])) as source:
+        # --- UPDATED VOICE CORRECTION SECTION ---
+        st.subheader("🎙️ Voice Correction")
+        st.info("Record your name if the text extraction was incorrect.")
+        audio = mic_recorder(
+            start_prompt="⏺️ Record Name", 
+            stop_prompt="⏹️ Stop", 
+            key='recorder',
+            format="wav"  # Forces WAV format to prevent ValueError
+        )
+
+        if audio:
+            r = sr.Recognizer()
             try:
-                rec_audio = r.record(source)
-                voice_result = r.recognize_google(rec_audio)
-                st.success(f"Captured: {voice_result}")
-                st.write("Tip: Manually update the Name box with this result.")
-            except:
-                st.error("Audio was not clear.")
+                # Wrap bytes in BytesIO so sr.AudioFile can read them
+                audio_file = io.BytesIO(audio['bytes'])
+                with sr.AudioFile(audio_file) as source:
+                    # Help Google recognize better by adjusting for silence/noise
+                    r.adjust_for_ambient_noise(source, duration=0.5)
+                    recorded_audio = r.record(source)
+                    
+                    # Call Google Speech API
+                    v_name = r.recognize_google(recorded_audio)
+                    st.success(f"Detected: {v_name}")
+                    st.caption("You can now update the Name field with the detected text.")
+            except sr.UnknownValueError:
+                st.error("Google Speech Recognition could not understand audio.")
+            except sr.RequestError:
+                st.error("Could not request results from Google Speech Recognition service.")
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
 
-    # 5. Export
-    st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        df = pd.DataFrame({"Field": ["Name", "DOB", "PAN", "Aadhaar"], "Value": [f_name, f_dob, f_pan, f_aadhaar]})
-        st.download_button("💾 Download CSV", df.to_csv(index=False).encode('utf-8'), "data.csv", "text/csv")
-    with c2:
-        pdf_bytes = create_pdf(f_name, f_pan, f_aadhaar, f_dob)
-        st.download_button("📄 Download PDF", pdf_bytes, "application.pdf", "application/pdf")
+        st.divider()
+        if st.button("Generate Documents"):
+            st.balloons()
+            
+        c1, c2 = st.columns(2)
+        with c1:
+            df = pd.DataFrame({"Field": ["Name", "DOB", "Gender", "PAN", "Aadhaar"], "Value": [f_name, f_dob, f_gender, f_pan, f_aadhaar]})
+            st.download_button("💾 CSV", df.to_csv(index=False).encode('utf-8'), "data.csv")
+        with c2:
+            pdf_bytes = create_pdf(f_name, f_pan, f_aadhaar, f_dob, f_gender)
+            st.download_button("📄 PDF Form", pdf_bytes, "application.pdf")
