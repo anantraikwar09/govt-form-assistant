@@ -9,3 +9,4 @@ fpdf
 numpy
 pdf2image
 streamlit-cropper
+pydub
