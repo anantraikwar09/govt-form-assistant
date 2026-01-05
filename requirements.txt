@@ -8,3 +8,4 @@ opencv-python-headless
 fpdf
 numpy
 pdf2image
+streamlit-cropper
