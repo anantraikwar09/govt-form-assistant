@@ -15,6 +15,8 @@ from pdf2image import convert_from_bytes
 from streamlit_cropper import st_cropper
 import tempfile
 import os 
+from pydub import AudioSegment
+import io
 
 # --- NEW: AUTOMATIC DOCUMENT EDGE DETECTION & CROP ---
 def crop_to_document(image):
@@ -383,34 +385,48 @@ with tab2:
         data = st.session_state.final_data
         st.subheader("📝 Edit & Verify Details")
         
-        # --- IMPROVED VOICE INPUT SECTION ---
+        # --- FIXED & FUNCTIONAL VOICE INPUT SECTION ---
         st.info("🎤 **Voice Correction**: Record your correction (e.g., 'Change name to Rajesh')")
         audio = mic_recorder(start_prompt="Record Voice", stop_prompt="Stop Recording", key='voice_recorder')
 
         if audio:
-            # Process audio only if new bytes are detected
-            r = sr.Recognizer()
-            audio_data = io.BytesIO(audio['bytes'])
-            with sr.AudioFile(audio_data) as voice_src:
-                recorded_audio = r.record(voice_src)
-                try:
-                    # High-level guideline: Support multiple Indian languages
+            try:
+                # 1. Convert WebM (Browser) to WAV (SpeechRecognition)
+                audio_segment = AudioSegment.from_file(io.BytesIO(audio['bytes']), format="webm")
+                wav_io = io.BytesIO()
+                audio_segment.export(wav_io, format="wav")
+                wav_io.seek(0)
+
+                # 2. Process with Speech Recognition
+                r = sr.Recognizer()
+                with sr.AudioFile(wav_io) as voice_src:
+                    recorded_audio = r.record(voice_src)
                     voice_text = r.recognize_google(recorded_audio, language='en-IN')
                     st.success(f"Recognized: {voice_text}")
                     
-                    # PERFORMANCE TRACKING / Field Suggestion Logic
-                    if "name" in voice_text.lower():
-                        st.info("💡 Tip: Use this to update the 'Full Name' field below.")
-                except Exception as e:
-                    st.error("Speech recognition failed. Please ensure your microphone is enabled in the browser.")
+                    # 3. BASIC LOGIC TO UPDATE FIELDS VIA VOICE
+                    voice_text_lower = voice_text.lower()
+                    if "change name to" in voice_text_lower:
+                        new_name = voice_text.split("to")[-1].strip()
+                        st.session_state.final_data["Name"] = new_name
+                        st.rerun()  # Refresh UI to show the new name in the text box
+                    elif "change dob to" in voice_text_lower:
+                        new_dob = voice_text.split("to")[-1].strip()
+                        st.session_state.final_data["DOB"] = new_dob
+                        st.rerun()
+
+            except Exception as e:
+                st.error(f"Voice Processing Error: {e}. Ensure 'ffmpeg' is installed in packages.txt.")
         
         st.divider()
         
+        # --- DATA FORM ---
         c1, c2 = st.columns(2)
         with c1:
             f_name = st.text_input("Full Name", data.get("Name", ""))
             f_dob = st.text_input("Date of Birth", data.get("DOB", ""))
-            f_gender = st.selectbox("Gender", ["Male", "Female", "Other"], index=0 if data.get("Gender")=="Male" else 1)
+            f_gender = st.selectbox("Gender", ["Male", "Female", "Other"], 
+                                   index=0 if data.get("Gender")=="Male" else 1)
         with c2:
             f_aadhaar = st.text_input("Aadhaar Number", data.get("Aadhaar", ""))
             f_pan = st.text_input("PAN Number", data.get("PAN", ""))
@@ -418,12 +434,16 @@ with tab2:
             f_dl = st.text_input("Driving License", data.get("Driving License", ""))
         
         f_address = st.text_area("Permanent Address", data.get("Address", ""))
-        mask_on = st.checkbox("Enable Secure Masking", value=True)
+        mask_on = st.checkbox("Enable Secure Masking (Privacy)", value=True)
 
         if st.button("💾 Generate Final PDF"):
+            # Use the values currently in the text boxes
             final_a = mask_number(f_aadhaar) if mask_on else f_aadhaar
             final_p = mask_number(f_pan) if mask_on else f_pan
-            pdf_bytes = create_pdf(f_name, final_p, final_a, f_voter, f_dl, f_dob, f_gender, f_address, face_img=st.session_state.detected_face)
+            
+            pdf_bytes = create_pdf(f_name, final_p, final_a, f_voter, f_dl, f_dob, f_gender, f_address, 
+                                   face_img=st.session_state.detected_face)
+            
             st.download_button("📥 Download Application", pdf_bytes, "application.pdf", "application/pdf")
     else:
-        st.info("👋 Upload a document to begin.")
+        st.info("👋 Upload a document in Tab 1 to begin.")
